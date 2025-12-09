@@ -1,22 +1,35 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
 )
 
-var jwtSecret []byte
+var (
+	jwtSecret     []byte
+	jwtSecretOnce sync.Once
+	isProduction  bool
+)
 
-func init() {
-	secret := os.Getenv("JWT_SECRET")
-	// if secret == "" {
-	// 	secret = "your-secret-key-change-in-production" // Default for development
-	// }
-	jwtSecret = []byte(secret)
+// getJWTSecret lazily loads the JWT secret to ensure .env is loaded first
+func getJWTSecret() []byte {
+	jwtSecretOnce.Do(func() {
+		godotenv.Load() // Load .env if not already loaded
+		secret := os.Getenv("JWT_SECRET")
+		if secret == "" {
+			log.Fatal("JWT_SECRET environment variable is required")
+		}
+		jwtSecret = []byte(secret)
+		isProduction = os.Getenv("GO_ENV") == "production"
+	})
+	return jwtSecret
 }
 
 // Claims struct for JWT
@@ -38,13 +51,13 @@ func GenerateToken(userID uint, username string) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString(getJWTSecret())
 }
 
 // ValidateToken validates a JWT token and returns the claims
 func ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
+		return getJWTSecret(), nil
 	})
 
 	if err != nil {
@@ -85,17 +98,23 @@ func AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
+// IsSecureCookie returns true if cookies should be secure (HTTPS only)
+func IsSecureCookie() bool {
+	getJWTSecret() // Ensure isProduction is initialized
+	return isProduction
+}
+
 // SetTokenCookie sets the JWT token as an HTTP-only cookie
 func SetTokenCookie(c *gin.Context, token string) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(
-		"token",          // name
-		token,            // value
-		60*60*24,         // maxAge (24 hours in seconds)
-		"/",              // path
-		"",               // domain (empty = current domain)
-		false,            // secure (set true in production with HTTPS)
-		true,             // httpOnly (prevents JavaScript access)
+		"token",            // name
+		token,              // value
+		60*60*24,           // maxAge (24 hours in seconds)
+		"/",                // path
+		"",                 // domain (empty = current domain)
+		IsSecureCookie(),   // secure (true in production with HTTPS)
+		true,               // httpOnly (prevents JavaScript access)
 	)
 }
 
@@ -105,10 +124,10 @@ func ClearTokenCookie(c *gin.Context) {
 	c.SetCookie(
 		"token",
 		"",
-		-1,    // maxAge -1 deletes the cookie
+		-1,               // maxAge -1 deletes the cookie
 		"/",
 		"",
-		false,
+		IsSecureCookie(), // secure (true in production with HTTPS)
 		true,
 	)
 }

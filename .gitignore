@@ -12,8 +12,8 @@ dist/
 *.test
 *.out
 
-# Go Modules
-go.sum
+# REMOVES FOR RAILWAYS DEPLOY
+# go.sum
 
 # OS Generated Files
 .DS_Store
